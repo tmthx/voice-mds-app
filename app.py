@@ -181,4 +181,5 @@ def play_audio_from_click(clickData):
     return html.Audio(src=f"/assets/{audio_file}", controls=True, autoPlay=True, style={"width": "400px"})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 8050))
+    app.run(host="0.0.0.0", port=port, debug=True)
