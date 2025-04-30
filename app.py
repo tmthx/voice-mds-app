@@ -47,14 +47,30 @@ def fig_from_df(df, title):
         )
 
     return dict(
-        data=[make_trace(can_mask, "circle"), make_trace(eng_mask, "square")],
+        data=[make_trace(can_mask, "circle"),
+              make_trace(eng_mask, "square")],
+
         layout=dict(
-            title=title, showlegend=False,
-            xaxis=dict(title="dimension 1", range=[x_min, x_max]),
-            yaxis=dict(title="dimension 2", range=[y_min, y_max]),
+            title=title,
+            template="plotly_white",
+            showlegend=False,
+
+            xaxis=dict(
+                title=dict(text="Dimension 1"),
+                range=[x_min, x_max]
+            ),
+            yaxis=dict(
+                title=dict(text="Dimension 2"),
+                range=[y_min, y_max]
+            ),
+
             margin=dict(l=60, r=60, b=60, t=60),
-            font=dict(family="Arial, sans-serif"),   # global font
-            width=800, height=600
+            font=dict(family="Arial, sans-serif"),
+            width=800,
+            height=600,
+
+            paper_bgcolor="white",
+            plot_bgcolor="white"
         )
     )
 
@@ -65,9 +81,7 @@ app.layout = html.Div(
     style={"fontFamily": "Arial, sans-serif", "textAlign": "center"},
     children=[
         html.H1("Perceived voice similarity"),
-        html.P(["Interactive 2D maps of perceived voice similarity from multidimensional scaling (MDS)",
-                html.Br(),
-                "Click a point to see details and play audio"]),
+        html.P(["Interactive 2D maps of perceived voice similarity from multidimensional scaling (MDS)"]),
         dcc.Tabs(
             style={"width": "860px", "margin": "0 auto"},   # center the tab headers
             children=[
@@ -123,7 +137,7 @@ app.layout = html.Div(
 # ---------- 6.  Callbacks ----------
 def audio_player(click):
     if not click or click["points"][0]["customdata"] is None:
-        return html.Div("click a point to play audio")
+        return html.Div("Click a point to see details and play audio")
     wav = click["points"][0]["customdata"]
     if not wav or not os.path.exists(f"./assets/{wav}"):
         return html.Div("audio not found")
