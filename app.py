@@ -3,6 +3,7 @@ from dash import dcc, html, Input, Output
 import pandas as pd
 import numpy as np
 import os
+import plotly.express as px
 
 # ---------- 1.  Load coordinates ----------
 coords_all = pd.read_csv("coords_all_participants.csv")
@@ -30,14 +31,23 @@ def audio_for(label):
 def fig_from_df(df, title):
     can_mask = df['language'] == 'can'
     eng_mask = df['language'] == 'eng'
-    spk_col  = df['speaker'].astype('category').cat.codes
+
+    unique_spk   = sorted(df['speaker'].unique())
+    palette      = px.colors.qualitative.Dark24 + px.colors.qualitative.Light24  # 48 colours
+    color_map    = {s: palette[i % len(palette)] for i, s in enumerate(unique_spk)}
+    colour_array = df['speaker'].map(color_map)       # Series of hex codes
 
     def make_trace(mask, symbol):
         return dict(
-            x=df.loc[mask, 'x'],  y=df.loc[mask, 'y'],
+            x=df.loc[mask, 'x'],
+            y=df.loc[mask, 'y'],
             mode="markers+text",
-            marker=dict(symbol=symbol, size=15, color=spk_col[mask],
-                        colorscale="Viridis", line=dict(width=1, color="black")),
+            marker=dict(
+                symbol=symbol,
+                size=15,
+                color=colour_array[mask],            # each point its own hex code
+                line=dict(width=1, color="black")
+            ),
             text=df.loc[mask, 'label'],
             textposition="top center",
             customdata=[audio_for(lb) for lb in df.loc[mask, 'label']],
@@ -49,26 +59,16 @@ def fig_from_df(df, title):
     return dict(
         data=[make_trace(can_mask, "circle"),
               make_trace(eng_mask, "square")],
-
         layout=dict(
             title=title,
             template="plotly_white",
             showlegend=False,
-
-            xaxis=dict(
-                title=dict(text="Dimension 1"),
-                range=[x_min, x_max]
-            ),
-            yaxis=dict(
-                title=dict(text="Dimension 2"),
-                range=[y_min, y_max]
-            ),
-
+            xaxis=dict(title=dict(text="Dimension 1"), range=[x_min, x_max]),
+            yaxis=dict(title=dict(text="Dimension 2"), range=[y_min, y_max]),
             margin=dict(l=60, r=60, b=60, t=60),
             font=dict(family="Arial, sans-serif"),
             width=800,
             height=600,
-
             paper_bgcolor="white",
             plot_bgcolor="white"
         )
