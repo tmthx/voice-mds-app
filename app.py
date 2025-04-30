@@ -2,184 +2,143 @@ import dash
 from dash import dcc, html, Input, Output
 import pandas as pd
 import numpy as np
-from sklearn.manifold import MDS
 import os
 
-def extract_speaker_lang(filename):
-    """Extract speaker + language from filename"""
-    parts = filename.split('_')
-    return f"{parts[0]}_{parts[1]}" if len(parts) > 1 else filename
+# ---------- 1.  Load coordinates ----------
+coords_all = pd.read_csv("coords_all_participants.csv")
+coords_c   = pd.read_csv("coords_cantonese_english_participants.csv")
+coords_e   = pd.read_csv("coords_english_participants.csv")
 
-def get_subject_columns(df, lang_type=None):
-    """Get subject columns, optionally by language type ('C' for Cantonese, 'E' for English), or all"""
-    if lang_type == 'C':
-        return [col for col in df.columns if col.startswith('subjC')]
-    elif lang_type == 'E':
-        return [col for col in df.columns if col.startswith('subjE')]
-    else:
-        return [col for col in df.columns if col.startswith('subj')]
-
-def compute_mds(df, subject_cols):
-    """Compute dissimilarity and perform MDS analysis based on subject columns"""
-    df['label1'] = df['stim1'].apply(extract_speaker_lang)
-    df['label2'] = df['stim2'].apply(extract_speaker_lang)
-    labels = sorted(set(df['label1']).union(set(df['label2'])))
-    label_to_idx = {label: i for i, label in enumerate(labels)}
-    n = len(labels)
-    dissimilarity_matrix = np.zeros((n, n))
-    for _, row in df.iterrows():
-        i = label_to_idx[row['label1']]
-        j = label_to_idx[row['label2']]
-        diss = np.mean([float(row[subj]) for subj in subject_cols])
-        dissimilarity_matrix[i, j] = diss
-        dissimilarity_matrix[j, i] = diss
-    mds = MDS(n_components=2, dissimilarity='precomputed', random_state=42, normalized_stress='auto')
-    coords = mds.fit_transform(dissimilarity_matrix)
-    return coords, labels
-
-def get_plot_info(df, labels):
-    """Return speaker, language, and audio filename for each point"""
-    speaker = [lbl.split('_')[0] for lbl in labels]
-    lang = [lbl.split('_')[1] for lbl in labels]
-    audio_files = []
-    for lbl in labels:
-        rows = df[(df['label1'] == lbl) | (df['label2'] == lbl)]
-        if not rows.empty:
-            row = rows.iloc[0]
-            if extract_speaker_lang(row['stim1']) == lbl:
-                audio_files.append(row['stim1'])
-            else:
-                audio_files.append(row['stim2'])
-        else:
-            audio_files.append(None)
-    return speaker, lang, audio_files
-
-# Precompute overall range for all plots
+# ---------- 2.  Original trial file (audio lookup) ----------
 df_full = pd.read_csv("mds_data.csv")
+df_full['label1'] = df_full['stim1'].apply(lambda f: f.split('_')[0] + '_' + f.split('_')[1])
+df_full['label2'] = df_full['stim2'].apply(lambda f: f.split('_')[0] + '_' + f.split('_')[1])
 
-subject_cols_all = get_subject_columns(df_full)
-subject_cols_c = get_subject_columns(df_full, 'C')
-subject_cols_e = get_subject_columns(df_full, 'E')
+# ---------- 3.  Axis limits (identical for all plots) ----------
+global_xy = pd.concat([coords_all[['x','y']], coords_c[['x','y']], coords_e[['x','y']]])
+x_min, x_max = global_xy['x'].min() - .5, global_xy['x'].max() + .5
+y_min, y_max = global_xy['y'].min() - .5, global_xy['y'].max() + .5
 
-coords_all, labels_all = compute_mds(df_full, subject_cols_all)
-coords_c, labels_c = compute_mds(df_full, subject_cols_c)
-coords_e, labels_e = compute_mds(df_full, subject_cols_e)
+# ---------- 4.  Helpers ----------
+def audio_for(label):
+    rows = df_full[(df_full['label1'] == label) | (df_full['label2'] == label)]
+    if rows.empty:
+        return None
+    r = rows.iloc[0]
+    return r['stim1'] if label in r['label1'] else r['stim2']
 
-# Find global axis limits
-all_coords = np.vstack([coords_all, coords_c, coords_e])
-x_min, x_max = all_coords[:, 0].min() - 0.5, all_coords[:, 0].max() + 0.5
-y_min, y_max = all_coords[:, 1].min() - 0.5, all_coords[:, 1].max() + 0.5
+def fig_from_df(df, title):
+    can_mask = df['language'] == 'can'
+    eng_mask = df['language'] == 'eng'
+    spk_col  = df['speaker'].astype('category').cat.codes
 
-def get_figure(coords, labels, title):
-    speakers, langs, audio_files = get_plot_info(df_full, labels)
-    color_vals = pd.Series(speakers).astype('category').cat.codes
-    hover_text = [
-        f"{lbl}<br>Speaker: {spk}<br>Language: {lng}" for lbl, spk, lng in zip(labels, speakers, langs)
-    ]
+    def make_trace(mask, symbol):
+        return dict(
+            x=df.loc[mask, 'x'],  y=df.loc[mask, 'y'],
+            mode="markers+text",
+            marker=dict(symbol=symbol, size=15, color=spk_col[mask],
+                        colorscale="Viridis", line=dict(width=1, color="black")),
+            text=df.loc[mask, 'label'],
+            textposition="top center",
+            customdata=[audio_for(lb) for lb in df.loc[mask, 'label']],
+            hovertext=[f"{r.label}<br>Speaker: {r.speaker}<br>Language: {r.language}"
+                       for _, r in df[mask].iterrows()],
+            hoverinfo="text"
+        )
 
-    can_idx = [i for i, l in enumerate(langs) if l == 'can']
-    eng_idx = [i for i, l in enumerate(langs) if l == 'eng']
+    return dict(
+        data=[make_trace(can_mask, "circle"), make_trace(eng_mask, "square")],
+        layout=dict(
+            title=title, showlegend=False,
+            xaxis=dict(title="dimension 1", range=[x_min, x_max]),
+            yaxis=dict(title="dimension 2", range=[y_min, y_max]),
+            margin=dict(l=60, r=60, b=60, t=60),
+            font=dict(family="Arial, sans-serif"),   # global font
+            width=800, height=600
+        )
+    )
 
-    figure = {
-        "data": [
-            {
-                "x": coords[can_idx, 0],
-                "y": coords[can_idx, 1],
-                "mode": "markers+text",
-                "marker": {
-                    "symbol": "circle",
-                    "size": 15,
-                    "color": color_vals[can_idx],
-                    "colorscale": "Viridis",
-                    "line": {"width": 1, "color": "black"},
-                },
-                "text": [labels[i] for i in can_idx],
-                "textposition": "top center",
-                "customdata": [audio_files[i] for i in can_idx],
-                "hoverinfo": "text",
-                "hovertext": [hover_text[i] for i in can_idx],
-                # no name field -> no legend entry
-            },
-            {
-                "x": coords[eng_idx, 0],
-                "y": coords[eng_idx, 1],
-                "mode": "markers+text",
-                "marker": {
-                    "symbol": "square",
-                    "size": 15,
-                    "color": color_vals[eng_idx],
-                    "colorscale": "Viridis",
-                    "line": {"width": 1, "color": "black"},
-                },
-                "text": [labels[i] for i in eng_idx],
-                "textposition": "top center",
-                "customdata": [audio_files[i] for i in eng_idx],
-                "hoverinfo": "text",
-                "hovertext": [hover_text[i] for i in eng_idx],
-                # no name field -> no legend entry
-            },
-        ],
-        "layout": {
-            "xaxis": {"title": "Dimension 1", "range": [x_min, x_max]},
-            "yaxis": {"title": "Dimension 2", "range": [y_min, y_max]},
-            "margin": dict(l=60, r=60, b=60, t=60),
-            "width": 800,
-            "height": 600,
-            "title": title,
-            "showlegend": False  # <- no legend
-        }
-    }
-    return figure
-
-# Dash app
+# ---------- 5.  Dash app ----------
 app = dash.Dash(__name__)
-app.layout = html.Div([
-    html.H3("MDS results (Click a point to play audio)"),
-    dcc.Tabs([
-        dcc.Tab(label="All participants", children=[
-            dcc.Graph(id="mds-scatter-all", figure=get_figure(coords_all, labels_all, "All participants")),
-            html.Div(id="audio-player-all")
-        ]),
-        dcc.Tab(label="Cantonese-English participants", children=[
-            dcc.Graph(id="mds-scatter-c", figure=get_figure(coords_c, labels_c, "Cantonese-English participants")),
-            html.Div(id="audio-player-c")
-        ]),
-        dcc.Tab(label="English participants", children=[
-            dcc.Graph(id="mds-scatter-e", figure=get_figure(coords_e, labels_e, "English participants")),
-            html.Div(id="audio-player-e")
-        ]),
+
+app.layout = html.Div(
+    style={"fontFamily": "Arial, sans-serif", "textAlign": "center"},
+    children=[
+        html.H1("Perceived voice similarity"),
+        html.P(["Interactive 2D maps of perceived voice similarity from multidimensional scaling (MDS)",
+                html.Br(),
+                "Click a point to see details and play audio"]),
+        dcc.Tabs(
+            style={"width": "860px", "margin": "0 auto"},   # center the tab headers
+            children=[
+                dcc.Tab(label="All listeners", children=[
+                    html.Div(                          # <-- centering wrapper
+                        children=[
+                            dcc.Graph(
+                                id="g-all",
+                                figure=fig_from_df(coords_all, "all listeners"),
+                                style={"margin": "0 auto"}  # center the plot
+                            ),
+                            html.Div(id="aud-all")
+                        ],
+                        style={"display": "flex",
+                            "flexDirection": "column",
+                            "alignItems": "center"}
+                    )
+                ]),
+                dcc.Tab(label="Cantonese-English listeners", children=[
+                    html.Div(
+                        children=[
+                            dcc.Graph(
+                                id="g-c",
+                                figure=fig_from_df(coords_c, "cantonese-english listeners"),
+                                style={"margin": "0 auto"}
+                            ),
+                            html.Div(id="aud-c")
+                        ],
+                        style={"display": "flex",
+                            "flexDirection": "column",
+                            "alignItems": "center"}
+                    )
+                ]),
+                dcc.Tab(label="English listeners", children=[
+                    html.Div(
+                        children=[
+                            dcc.Graph(
+                                id="g-e",
+                                figure=fig_from_df(coords_e, "english listeners"),
+                                style={"margin": "0 auto"}
+                            ),
+                            html.Div(id="aud-e")
+                        ],
+                        style={"display": "flex",
+                            "flexDirection": "column",
+                            "alignItems": "center"}
+                    )
+                ]),
+            ]
+        )   
     ])
-])
 
-@app.callback(
-    Output("audio-player-all", "children"),
-    Input("mds-scatter-all", "clickData")
-)
-def update_audio_all(clickData):
-    return play_audio_from_click(clickData)
+# ---------- 6.  Callbacks ----------
+def audio_player(click):
+    if not click or click["points"][0]["customdata"] is None:
+        return html.Div("click a point to play audio")
+    wav = click["points"][0]["customdata"]
+    if not wav or not os.path.exists(f"./assets/{wav}"):
+        return html.Div("audio not found")
+    return html.Audio(src=f"/assets/{wav}", controls=True, autoPlay=True, style={"width": "400px"})
 
-@app.callback(
-    Output("audio-player-c", "children"),
-    Input("mds-scatter-c", "clickData")
-)
-def update_audio_c(clickData):
-    return play_audio_from_click(clickData)
+@app.callback(Output("aud-all", "children"), Input("g-all", "clickData"))
+def callback_all(c): return audio_player(c)
 
-@app.callback(
-    Output("audio-player-e", "children"),
-    Input("mds-scatter-e", "clickData")
-)
-def update_audio_e(clickData):
-    return play_audio_from_click(clickData)
+@app.callback(Output("aud-c",   "children"), Input("g-c",  "clickData"))
+def callback_c(c):   return audio_player(c)
 
-def play_audio_from_click(clickData):
-    if clickData is None or clickData["points"][0]["customdata"] is None:
-        return html.Div("Please click a point to play audio.")
-    audio_file = clickData["points"][0]["customdata"]
-    if not os.path.exists(f"./assets/{audio_file}"):
-        return html.Div(f"Audio file not found: {audio_file}")
-    return html.Audio(src=f"/assets/{audio_file}", controls=True, autoPlay=True, style={"width": "400px"})
+@app.callback(Output("aud-e",   "children"), Input("g-e",  "clickData"))
+def callback_e(c):   return audio_player(c)
 
+# ---------- 7.  Run ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
     app.run(host="0.0.0.0", port=port, debug=True)
