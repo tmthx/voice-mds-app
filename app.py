@@ -1,26 +1,32 @@
 import dash
 from dash import dcc, html, Input, Output
 import pandas as pd
-import numpy as np
 import os
-import plotly.express as px
+import plotly.graph_objs as go
 
-# ---------- 1.  Load coordinates ----------
-coords_all = pd.read_csv("coords_all_participants.csv")
-coords_c   = pd.read_csv("coords_cantonese_english_participants.csv")
-coords_e   = pd.read_csv("coords_english_participants.csv")
+# ---------- Load coordinate CSVs ----------
+def load_coords(group, dim):
+    path = f"coords/coords_{group}_{dim}dim.csv"
+    return pd.read_csv(path)
 
-# ---------- 2.  Original trial file (audio lookup) ----------
-df_full = pd.read_csv("mds_data.csv")
+coords = {
+    "2d": {
+        "all": load_coords("all", 2),
+        "can": load_coords("can", 2),
+        "eng": load_coords("eng", 2)
+    },
+    "3d": {
+        "all": load_coords("all", 3),
+        "can": load_coords("can", 3),
+        "eng": load_coords("eng", 3)
+    }
+}
+
+# ---------- Audio lookup ----------
+df_full = pd.read_csv("item_list.csv")
 df_full['label1'] = df_full['stim1'].apply(lambda f: f.split('_')[0] + '_' + f.split('_')[1])
 df_full['label2'] = df_full['stim2'].apply(lambda f: f.split('_')[0] + '_' + f.split('_')[1])
 
-# ---------- 3.  Axis limits (identical for all plots) ----------
-global_xy = pd.concat([coords_all[['x','y']], coords_c[['x','y']], coords_e[['x','y']]])
-x_min, x_max = global_xy['x'].min() - .5, global_xy['x'].max() + .5
-y_min, y_max = global_xy['y'].min() - .5, global_xy['y'].max() + .5
-
-# ---------- 4.  Helpers ----------
 def audio_for(label):
     rows = df_full[(df_full['label1'] == label) | (df_full['label2'] == label)]
     if rows.empty:
@@ -28,131 +34,144 @@ def audio_for(label):
     r = rows.iloc[0]
     return r['stim1'] if label in r['label1'] else r['stim2']
 
-def fig_from_df(df, title):
-    can_mask = df['language'] == 'can'
-    eng_mask = df['language'] == 'eng'
+# ---------- Helper to build figures ----------
+def build_2d_figure(df):
+    unique_spk = sorted(df['speaker'].unique())
+    color_map = {s: f"hsl({i * 360 / len(unique_spk)},50%,50%)" for i, s in enumerate(unique_spk)}
 
-    unique_spk   = sorted(df['speaker'].unique())
-    palette      = px.colors.qualitative.Dark24 + px.colors.qualitative.Light24  # 48 colours
-    color_map    = {s: palette[i % len(palette)] for i, s in enumerate(unique_spk)}
-    colour_array = df['speaker'].map(color_map)       # Series of hex codes
-
-    def make_trace(mask, symbol):
-        return dict(
-            x=df.loc[mask, 'x'],
-            y=df.loc[mask, 'y'],
-            mode="markers+text",
+    traces = []
+    for lang, symbol in [('can', 'circle'), ('eng', 'square')]:
+        lang_df = df[df['language'] == lang]
+        hovertext = [
+            f"{r['label']}<br>Speaker: {r['speaker']}<br>Language: {r['language']}<br>Coords: ({r['dim1']:.2f}, {r['dim2']:.2f})"
+            for _, r in lang_df.iterrows()
+        ]
+        traces.append(go.Scatter(
+            x=lang_df['dim1'],
+            y=lang_df['dim2'],
+            mode='markers+text',
             marker=dict(
+                size=12,
+                color=[color_map[s] for s in lang_df['speaker']],
                 symbol=symbol,
-                size=15,
-                color=colour_array[mask],            # each point its own hex code
-                line=dict(width=1, color="black")
+                line=dict(width=1, color='black')
             ),
-            text=df.loc[mask, 'label'],
-            textposition="top center",
-            customdata=[audio_for(lb) for lb in df.loc[mask, 'label']],
-            hovertext=[f"{r.label}<br>Speaker: {r.speaker}<br>Language: {r.language}"
-                       for _, r in df[mask].iterrows()],
-            hoverinfo="text"
-        )
+            text=lang_df['label'],
+            textposition='top center',
+            customdata=[audio_for(l) for l in lang_df['label']],
+            hoverinfo='text',
+            hovertext=hovertext,
+            name=lang
+        ))
 
-    return dict(
-        data=[make_trace(can_mask, "circle"),
-              make_trace(eng_mask, "square")],
-        layout=dict(
-            title=title,
-            template="plotly_white",
-            showlegend=False,
-            xaxis=dict(title=dict(text="Dimension 1"), range=[x_min, x_max]),
-            yaxis=dict(title=dict(text="Dimension 2"), range=[y_min, y_max]),
-            margin=dict(l=60, r=60, b=60, t=60),
-            font=dict(family="Arial, sans-serif"),
-            width=800,
-            height=600,
-            paper_bgcolor="white",
-            plot_bgcolor="white"
-        )
-    )
+    return go.Figure(data=traces, layout=go.Layout(
+        template='plotly_white',
+        showlegend=False,
+        xaxis=dict(title='Dimension 1', range=[-0.8, 0.8]),
+        yaxis=dict(title='Dimension 2', range=[-0.8, 0.8]),
+        margin=dict(l=40, r=40, t=40, b=40),
+        height=600,
+        font=dict(family="Arial, sans-serif")
+    ))
 
-# ---------- 5.  Dash app ----------
-app = dash.Dash(__name__)
+def build_3d_figure(df):
+    unique_spk = sorted(df['speaker'].unique())
+    color_map = {s: f"hsl({i * 360 / len(unique_spk)},50%,50%)" for i, s in enumerate(unique_spk)}
 
-app.layout = html.Div(
-    style={"fontFamily": "Arial, sans-serif", "textAlign": "center"},
-    children=[
-        html.H1("Perceived voice similarity"),
-        html.P(["Interactive 2D maps of perceived voice similarity from multidimensional scaling (MDS)"]),
-        dcc.Tabs(
-            style={"width": "860px", "margin": "0 auto"},   # center the tab headers
-            children=[
-                dcc.Tab(label="All listeners", children=[
-                    html.Div(                          # <-- centering wrapper
-                        children=[
-                            dcc.Graph(
-                                id="g-all",
-                                figure=fig_from_df(coords_all, "all listeners"),
-                                style={"margin": "0 auto"}  # center the plot
-                            ),
-                            html.Div(id="aud-all")
-                        ],
-                        style={"display": "flex",
-                            "flexDirection": "column",
-                            "alignItems": "center"}
-                    )
-                ]),
-                dcc.Tab(label="Cantonese-English listeners", children=[
-                    html.Div(
-                        children=[
-                            dcc.Graph(
-                                id="g-c",
-                                figure=fig_from_df(coords_c, "cantonese-english listeners"),
-                                style={"margin": "0 auto"}
-                            ),
-                            html.Div(id="aud-c")
-                        ],
-                        style={"display": "flex",
-                            "flexDirection": "column",
-                            "alignItems": "center"}
-                    )
-                ]),
-                dcc.Tab(label="English listeners", children=[
-                    html.Div(
-                        children=[
-                            dcc.Graph(
-                                id="g-e",
-                                figure=fig_from_df(coords_e, "english listeners"),
-                                style={"margin": "0 auto"}
-                            ),
-                            html.Div(id="aud-e")
-                        ],
-                        style={"display": "flex",
-                            "flexDirection": "column",
-                            "alignItems": "center"}
-                    )
-                ]),
-            ]
-        )   
-    ])
+    traces = []
+    for lang, symbol in [('can', 'circle'), ('eng', 'square')]:
+        lang_df = df[df['language'] == lang]
+        hovertext = [
+            f"{r['label']}<br>Speaker: {r['speaker']}<br>Language: {r['language']}<br>Coords: ({r['dim1']:.2f}, {r['dim2']:.2f}, {r['dim3']:.2f})"
+            for _, r in lang_df.iterrows()
+        ]
+        traces.append(go.Scatter3d(
+            x=lang_df['dim1'],
+            y=lang_df['dim2'],
+            z=lang_df['dim3'],
+            mode='markers+text',
+            marker=dict(
+                size=6,
+                color=[color_map[s] for s in lang_df['speaker']],
+                symbol=symbol,
+                line=dict(width=1, color='black')
+            ),
+            text=lang_df['label'],
+            textposition='top center',
+            customdata=[audio_for(l) for l in lang_df['label']],
+            hoverinfo='text',
+            hovertext=hovertext,
+            name=lang
+        ))
 
-# ---------- 6.  Callbacks ----------
-def audio_player(click):
-    if not click or click["points"][0]["customdata"] is None:
+    return go.Figure(data=traces, layout=go.Layout(
+        showlegend=False,
+        scene=dict(
+            xaxis=dict(title='Dimension 1', range=[-0.8, 0.8]),
+            yaxis=dict(title='Dimension 2', range=[-0.8, 0.8]),
+            zaxis=dict(title='Dimension 3', range=[-0.8, 0.8])
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+        height=600,
+        font=dict(family="Arial, sans-serif")
+    ))
+
+# ---------- Dash App ----------
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+
+app.layout = html.Div([
+    html.H1("Perceived voice similarity", style={"marginTop": "10px"}),
+    html.P("Interactive maps from multidimensional scaling (MDS)"),
+    
+    html.Div([
+        dcc.Tabs(id='dim-tabs', value='2d', children=[
+            dcc.Tab(label='2D MDS', value='2d'),
+            dcc.Tab(label='3D MDS', value='3d')
+        ])
+    ], style={"width": "600px", "margin": "20px auto"}),
+
+    html.Div(id='listener-tabs-wrapper'),
+
+    html.Div(id='audio-output', style={'marginTop': '20px'})
+], style={"fontFamily": "Arial, sans-serif", "textAlign": "center"})
+
+# ---------- Callbacks ----------
+@app.callback(
+    Output('listener-tabs-wrapper', 'children'),
+    Input('dim-tabs', 'value')
+)
+def update_tabs(dim):
+    fig_func = build_2d_figure if dim == '2d' else build_3d_figure
+    return dcc.Tabs(children=[
+        dcc.Tab(label='All listeners', children=[
+            dcc.Graph(id='g-all', figure=fig_func(coords[dim]['all']))
+        ]),
+        dcc.Tab(label='Cantonese-English listeners', children=[
+            dcc.Graph(id='g-can', figure=fig_func(coords[dim]['can']))
+        ]),
+        dcc.Tab(label='English listeners', children=[
+            dcc.Graph(id='g-eng', figure=fig_func(coords[dim]['eng']))
+        ])
+    ], style={"width": "900px", "margin": "0 auto"})
+
+@app.callback(
+    Output('audio-output', 'children'),
+    Input('g-all', 'clickData'),
+    Input('g-can', 'clickData'),
+    Input('g-eng', 'clickData')
+)
+def play_audio(c_all, c_can, c_eng):
+    click = next((c for c in [c_all, c_can, c_eng] if c and c.get("points")), None)
+    if not click:
         return html.Div("Click a point to see details and play audio")
-    wav = click["points"][0]["customdata"]
-    if not wav or not os.path.exists(f"./assets/{wav}"):
-        return html.Div("audio not found")
-    return html.Audio(src=f"/assets/{wav}", controls=True, autoPlay=True, style={"width": "400px"})
 
-@app.callback(Output("aud-all", "children"), Input("g-all", "clickData"))
-def callback_all(c): return audio_player(c)
+    audio_file = click["points"][0]["customdata"]
+    if not audio_file or not os.path.exists(f"./assets/{audio_file}"):
+        return html.Div("Audio file not found")
 
-@app.callback(Output("aud-c",   "children"), Input("g-c",  "clickData"))
-def callback_c(c):   return audio_player(c)
+    return html.Audio(src=f"/assets/{audio_file}", controls=True, autoPlay=True, style={"width": "400px"})
 
-@app.callback(Output("aud-e",   "children"), Input("g-e",  "clickData"))
-def callback_e(c):   return audio_player(c)
-
-# ---------- 7.  Run ----------
+# ---------- Run ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
     app.run(host="0.0.0.0", port=port, debug=True)
