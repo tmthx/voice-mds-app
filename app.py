@@ -4,11 +4,11 @@ import pandas as pd
 import plotly.graph_objs as go
 import os
 
-# ─────────────────────────  LOAD CAPTION  ─────────────────────────
+# Load caption
 with open("interactive_mds_caption.md", encoding="utf-8") as fh:
     CAPTION_MD = fh.read()
 
-# ───────────────────────  DATA  ────────────────────────
+# Data
 def load_coords(stim, group, dim):
     fn = f"mds_results/coords_{stim}_stimuli_{group}_listeners_{dim}dim.csv"
     return pd.read_csv(fn)
@@ -23,7 +23,11 @@ coords = {
     for d in dims
 }
 
-# ──────────────────  AUXILIARIES  ──────────────────────
+# load stress values
+stress_df = pd.read_csv("mds_results/stress_summary.csv").set_index("ndim")
+stress_lookup = {dim: stress_df.loc[dim].to_dict() for dim in [2, 3]}
+
+# Auxiliary functions
 def audio_for(row, stim):
     if stim == "mixed":
         return [f"{row['speaker']}_Can_utt1.wav", f"{row['speaker']}_Can_utt2.wav",
@@ -43,14 +47,14 @@ def color_map(speakers):
 sym_map  = {"can": "circle", "eng": "square", "mixed": "diamond"}
 name_map = {"can": "Cantonese", "eng": "English", "mixed": "Mixed"}
 
-# ──────────────────  FIGURE BUILDER  ───────────────────
-def build_figure(df, dim, stim):
+# Figure builder
+def build_figure(df, dim, stim, group=None):
     df = df.copy()
     df["label"] = df["speaker"] + "_" + (df["language"].str.capitalize()
                                          if stim != "mixed" else "Mixed")
 
-    cm    = color_map(df["speaker"])
-    size  = 12 if dim == "2d" or (dim == "3d" and stim == "mixed") else 6
+    cm = color_map(df["speaker"])
+    size = 12 if dim == "2d" or (dim == "3d" and stim == "mixed") else 6
     traces = []
 
     langs = ["mixed"] if stim == "mixed" else ["can", "eng"]
@@ -91,14 +95,15 @@ def build_figure(df, dim, stim):
         template="plotly_white",
         showlegend=False,
         height=600,
-        margin=dict(l=40, r=40, t=40, b=40),
+        margin=dict(l=40, r=40, t=60, b=40),
         font=dict(family="Arial, sans-serif")
     )
 
     if dim == "2d":
         layout.update(
             xaxis=dict(title="Dimension 1", range=[-0.8, 0.8]),
-            yaxis=dict(title="Dimension 2", range=[-0.8, 0.8]))
+            yaxis=dict(title="Dimension 2", range=[-0.8, 0.8])
+        )
     else:
         layout.update(scene=dict(
             xaxis=dict(title="Dimension 1", range=[-0.8, 0.8]),
@@ -106,15 +111,31 @@ def build_figure(df, dim, stim):
             zaxis=dict(title="Dimension 3", range=[-0.8, 0.8])
         ))
 
+    # add stress annotation
+    if group:
+        dim_num = int(dim[:-1])
+        key = f"{stim}_stimuli_{group}_listeners"
+        if key in stress_lookup[dim_num]:
+            stress_val = stress_lookup[dim_num][key]
+            layout.annotations = [
+                dict(
+                    text=f"stress-1 = {stress_val:.2f}".replace("0.", "."),
+                    xref="paper", yref="paper",
+                    x=0, y=1.15, showarrow=False,
+                    font=dict(size=12),
+                    align="left"
+                )
+            ]
+
     return go.Figure(traces, layout)
 
-# ─────────────────────  DASH APP  ──────────────────────
+# Dash app
 TAB_W = "900px"          # width for all tab rows
 SIDE_W = "380px"         # sidebar width for caption
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
-# ---------- LEFT-HAND interactive panel ----------
+# Left-hand interactive panel
 interactive_panel = html.Div([
     html.H1("Perceived voice similarity",
             style={"fontFamily": "Arial, sans-serif"}),
@@ -140,7 +161,7 @@ interactive_panel = html.Div([
              style={"marginTop": "20px", "fontFamily": "Arial, sans-serif"})
 ], style={"flex": "1 1 auto", "paddingRight": "20px"})
 
-# ---------- RIGHT-HAND caption panel ----------
+# Right-hand caption panel
 caption_panel = html.Div(
     dcc.Markdown(CAPTION_MD,
                  style={"whiteSpace": "pre-wrap",
@@ -156,7 +177,7 @@ caption_panel = html.Div(
 app.layout = html.Div([interactive_panel, caption_panel],
                       style={"display": "flex"})
 
-# ───────  build stimulus-set layer  ───────
+# stimulus-set layer
 @app.callback(Output("stim-tabs-wrapper", "children"),
               Input("dim-tabs", "value"))
 def make_stim_tabs(dim):
@@ -168,12 +189,12 @@ def make_stim_tabs(dim):
     ], style={"width": TAB_W, "margin": "0 auto",
               "fontFamily": "Arial, sans-serif"})
 
-# ───────  build listener-group layer  ───────
+# listener-group layer
 @app.callback(Output("listener-tabs-wrapper", "children"),
               Input("dim-tabs",  "value"),
               Input("stim-tabs", "value"))
 def make_listener_tabs(dim, stim):
-    fig = lambda g: build_figure(coords[dim][stim][g], dim, stim)
+    fig = lambda g: build_figure(coords[dim][stim][g], dim, stim, group=g)
     return dcc.Tabs(children=[
         dcc.Tab(label="All listeners",
                 children=[dcc.Graph(id="g-all", figure=fig("all"))]),
@@ -184,7 +205,7 @@ def make_listener_tabs(dim, stim):
     ], style={"width": TAB_W, "margin": "0 auto",
               "fontFamily": "Arial, sans-serif"})
 
-# ───────  audio playback  ───────
+# audio playback
 @app.callback(Output("audio-output", "children"),
               Input("g-all", "clickData"),
               Input("g-can", "clickData"),
@@ -201,7 +222,7 @@ def play_audio(cd_all, cd_can, cd_eng):
                for f in files if os.path.exists(f"./assets/{f}")]
     return players or "Audio files not found"
 
-# ─────────────────  run  ──────────────────
+# Run
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
     app.run(host="0.0.0.0", port=port, debug=True)
