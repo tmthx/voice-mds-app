@@ -193,7 +193,7 @@ def play_audio(cd_all, cd_can, cd_eng):
     click = next((c for c in (cd_all, cd_can, cd_eng)
                   if c and c.get("points")), None)
     if not click:
-        return "Click a point to hear example audio"
+        return "Click a point to play audio"
 
     files = click["points"][0]["customdata"]
     players = [html.Audio(src=f"/assets/{f}", controls=True,
